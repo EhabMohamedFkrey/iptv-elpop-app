@@ -25,6 +25,14 @@
       "expo-screen-orientation"
     ],
     "scheme": "iptvsmarters",
-    
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "ff58dd62-8ead-4a6b-8d08-cc332d0eda1e"
+      }
+    },
+    "owner": "elpop"
   }
 }
