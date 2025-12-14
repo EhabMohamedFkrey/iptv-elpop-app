@@ -26,7 +26,7 @@ jobs:
         run: npm install
 
       - name: ➕ Install missing peer dependencies
-        run: npx expo install expo-font
+        run: npx expo install expo-font # إضافة المكتبة الناقصة
 
       - name: 🚀 Build APK
         run: eas build -p android --profile preview --non-interactive
