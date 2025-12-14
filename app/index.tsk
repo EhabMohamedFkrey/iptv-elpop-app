@@ -1,0 +1,720 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  StyleSheet, Text, View, TextInput, TouchableOpacity, Image, 
+  ScrollView, FlatList, Dimensions, ActivityIndicator, Alert, 
+  ImageBackground, StatusBar, I18nManager, Modal, Platform, Linking 
+} from 'react-native';
+import { VLCPlayer } from 'react-native-vlc-media-player';
+import { LinearGradient } from 'expo-linear-gradient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { FontAwesome5, MaterialIcons, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
+
+// إجبار التطبيق على الاتجاه من اليسار لليمين لضبط التصميم يدوياً
+I18nManager.allowRTL(false);
+
+// --- الألوان والتصميم (مطابق لملف HTML) ---
+const COLORS = {
+  bg: '#0f0518',
+  sidebarBg: 'rgba(0,0,0,0.8)',
+  card: 'rgba(255, 255, 255, 0.05)',
+  activeItem: '#0097e6', // Smarters Blue
+  purple: '#7158e2',
+  orange: '#e1b12c',
+  red: '#e74c3c',
+  green: '#2ecc71',
+  text: '#ffffff',
+  textGray: '#b2bec3',
+  inputBg: 'rgba(255, 255, 255, 0.1)',
+  overlay: 'rgba(0,0,0,0.7)'
+};
+
+const GRADIENTS = {
+  live: ['#0984e3', '#00cec9'],
+  movies: ['#fdcb6e', '#e17055'],
+  series: ['#6c5ce7', '#a29bfe'],
+  bg: ['#1a0b2e', '#000000']
+};
+
+// --- دوال مساعدة ---
+const formatTime = (date: Date) => date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+const formatDuration = (millis: number) => {
+  if (!millis || millis < 0) return "00:00";
+  const totalSeconds = millis / 1000;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+};
+
+export default function App() {
+  // --- States ---
+  const [currentView, setCurrentView] = useState('login'); // login, dashboard, grid, details, player
+  const [loading, setLoading] = useState(false);
+  const [time, setTime] = useState(new Date());
+
+  // Login & Accounts
+  const [creds, setCreds] = useState({ host: '', username: '', password: '', name: '' });
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [showAccountsModal, setShowAccountsModal] = useState(false);
+
+  // Data
+  const [categories, setCategories] = useState<any[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<any>(null);
+  const [gridItems, setGridItems] = useState<any[]>([]);
+  const [currentCatType, setCurrentCatType] = useState(''); // live, movie, series
+  
+  // Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+
+  // Series Details
+  const [seriesInfo, setSeriesInfo] = useState<any>(null);
+  const [seasons, setSeasons] = useState<string[]>([]);
+  const [episodes, setEpisodes] = useState<any>({});
+  const [selectedSeason, setSelectedSeason] = useState<any>(null);
+  const [currentEpisodeIndex, setCurrentEpisodeIndex] = useState(-1);
+  const [currentEpisodeList, setCurrentEpisodeList] = useState<any[]>([]);
+
+  // Player (VLC)
+  const [playerUrl, setPlayerUrl] = useState('');
+  const [playerTitle, setPlayerTitle] = useState('');
+  const [currentTime, setCurrentTime] = useState(0);
+  const [totalDuration, setTotalDuration] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const controlTimeout = useRef<any>(null);
+
+  // Favorites & History
+  const [favorites, setFavorites] = useState<any[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
+
+  // --- Effects ---
+  useEffect(() => {
+    loadAccounts();
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // --- Logic: Accounts ---
+  const loadAccounts = async () => {
+    try {
+      const saved = await AsyncStorage.getItem('iptv_accounts');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setAccounts(parsed);
+        // Auto login last active
+        const lastActive = await AsyncStorage.getItem('last_active_account');
+        if (lastActive) {
+          const acc = parsed.find((a:any) => a.id === lastActive);
+          if (acc) loginWithStoredCreds(acc);
+        }
+      }
+    } catch(e) {}
+  };
+
+  const saveAccount = async (newCreds: any, userInfo: any) => {
+    const newAcc = {
+      id: Date.now().toString(),
+      name: newCreds.name || userInfo.username,
+      host: newCreds.host,
+      username: newCreds.username,
+      password: newCreds.password,
+      userInfo: userInfo
+    };
+    const updated = [...accounts, newAcc];
+    setAccounts(updated);
+    await AsyncStorage.setItem('iptv_accounts', JSON.stringify(updated));
+    await AsyncStorage.setItem('last_active_account', newAcc.id);
+  };
+
+  // --- Logic: API ---
+  const apiFetch = async (action: string, params = '', customCreds = null) => {
+    const c = customCreds || creds;
+    setLoading(true);
+    let host = c.host.startsWith('http') ? c.host : 'http://' + c.host;
+    host = host.replace(/\/player_api\.php$/, ''); 
+    const url = `${host}/player_api.php?username=${c.username}&password=${c.password}&action=${action}${params}`;
+    
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      setLoading(false);
+      return data;
+    } catch {
+      setLoading(false);
+      return null;
+    }
+  };
+
+  const handleLogin = async (overrideCreds: any = null) => {
+    const c = overrideCreds || creds;
+    if (!c.host || !c.username || !c.password) return Alert.alert('خطأ', 'يرجى ملء جميع البيانات');
+    
+    setLoading(true);
+    let host = c.host.startsWith('http') ? c.host : 'http://' + c.host;
+    host = host.replace(/\/player_api\.php$/, '');
+    const url = `${host}/player_api.php?username=${c.username}&password=${c.password}`;
+
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      setLoading(false);
+      
+      if (data.user_info?.auth === 1) {
+        setCurrentUser(data.user_info);
+        if (!overrideCreds) await saveAccount(c, data.user_info);
+        setCreds({ ...c, host }); // Update state with clean host
+        loadLocalData(c.username);
+        setCurrentView('dashboard');
+      } else {
+        Alert.alert('خطأ', 'بيانات الدخول غير صحيحة');
+      }
+    } catch (e) {
+      setLoading(false);
+      Alert.alert('خطأ', 'فشل الاتصال بالسيرفر');
+    }
+  };
+
+  const loginWithStoredCreds = (acc: any) => {
+    setCreds({ host: acc.host, username: acc.username, password: acc.password, name: acc.name });
+    handleLogin({ host: acc.host, username: acc.username, password: acc.password });
+    setShowAccountsModal(false);
+  };
+
+  const handleLogout = async () => {
+      await AsyncStorage.removeItem('last_active_account');
+      setCreds({ host: '', username: '', password: '', name: '' });
+      setCurrentUser(null);
+      setCurrentView('login');
+  };
+
+  // --- Logic: Local Data ---
+  const loadLocalData = async (user: string) => {
+    const p = `user_${user}_`;
+    const f = await AsyncStorage.getItem(p+'fav');
+    const h = await AsyncStorage.getItem(p+'hist');
+    if(f) setFavorites(JSON.parse(f));
+    if(h) setHistory(JSON.parse(h));
+  };
+
+  const toggleFavorite = async (item: any) => {
+    let newFavs = [...favorites];
+    const id = item.stream_id || item.series_id;
+    const exists = newFavs.find(i => (i.stream_id || i.series_id) === id);
+    if(exists) newFavs = newFavs.filter(i => (i.stream_id || i.series_id) !== id);
+    else newFavs.push(item);
+    setFavorites(newFavs);
+    await AsyncStorage.setItem(`user_${creds.username}_fav`, JSON.stringify(newFavs));
+  };
+
+  // --- Logic: Navigation ---
+  const navigateToCategory = async (type: string) => {
+    setCurrentCatType(type);
+    let action = '';
+    if (type === 'live') action = 'get_live_categories';
+    if (type === 'movie') action = 'get_vod_categories';
+    if (type === 'series') action = 'get_series_categories';
+
+    const data = await apiFetch(action);
+    if (data && Array.isArray(data)) {
+      setCategories([{category_id: 'all', category_name: 'الكل'}, ...data]);
+      handleCategorySelect({category_id: 'all'}, type);
+      setCurrentView('grid');
+    } else {
+      Alert.alert('تنبيه', 'لا توجد بيانات');
+    }
+  };
+
+  const handleCategorySelect = async (category: any, type: string) => {
+    setSelectedCategory(category);
+    let action = '';
+    if (type === 'live') action = 'get_live_streams';
+    if (type === 'movie') action = 'get_vod_streams';
+    if (type === 'series') action = 'get_series';
+
+    const params = category.category_id === 'all' ? '' : `&category_id=${category.category_id}`;
+    const data = await apiFetch(action, params);
+    if (data) setGridItems(data);
+  };
+
+  const handleSearch = () => {
+    if(searchQuery.length < 3) return;
+    const filtered = gridItems.filter(i => 
+      (i.name && i.name.toLowerCase().includes(searchQuery.toLowerCase())) || 
+      (i.title && i.title.toLowerCase().includes(searchQuery.toLowerCase()))
+    );
+    setSearchResults(filtered);
+  };
+
+  // --- Logic: Series & Player ---
+  const openSeriesDetails = async (item: any) => {
+    const data = await apiFetch('get_series_info', `&series_id=${item.series_id}`);
+    if(data?.episodes) {
+      setSeriesInfo(data.info);
+      setEpisodes(data.episodes);
+      const s = Object.keys(data.episodes);
+      setSeasons(s);
+      setSelectedSeason(s[0]);
+      setCurrentView('details');
+    }
+  };
+
+  const playItem = (item: any, type = 'movie') => {
+    const ext = item.container_extension || (type === 'live' ? 'm3u8' : 'mp4');
+    let url = `${creds.host}/${type}/${creds.username}/${creds.password}/${item.stream_id}.${ext}`;
+    if (type === 'series') url = `${creds.host}/series/${creds.username}/${creds.password}/${item.id}.${item.container_extension}`;
+    
+    setPlayerUrl(url);
+    setPlayerTitle(item.name || item.title);
+    setIsPaused(false);
+    setCurrentTime(0);
+    setTotalDuration(0);
+    setCurrentView('player');
+    
+    // Add to History
+    const newHist = [item, ...history.filter(i => (i.stream_id || i.series_id) !== (item.stream_id || item.series_id))].slice(0, 50);
+    setHistory(newHist);
+    AsyncStorage.setItem(`user_${creds.username}_hist`, JSON.stringify(newHist));
+  };
+
+  const playEpisode = (index: number) => {
+    if(index >= 0 && index < currentEpisodeList.length) {
+      setCurrentEpisodeIndex(index);
+      playItem(currentEpisodeList[index], 'series');
+    }
+  };
+
+  const toggleControls = () => {
+    setShowControls(!showControls);
+    if(!showControls) {
+      if(controlTimeout.current) clearTimeout(controlTimeout.current);
+      controlTimeout.current = setTimeout(() => setShowControls(false), 5000);
+    }
+  };
+
+  // --- Components Renders ---
+
+  const renderLogin = () => (
+    <ImageBackground source={{uri: 'https://wallpaperaccess.com/full/1567833.jpg'}} style={styles.bgImage}>
+      <View style={styles.loginOverlay}>
+        <View style={styles.loginCard}>
+          <Image source={{uri: 'https://cdn-icons-png.flaticon.com/512/3163/3163478.png'}} style={styles.logo} />
+          <Text style={styles.appTitle}>IPTV SMARTERS <Text style={{color: COLORS.purple}}>PRO</Text></Text>
+          
+          <View style={styles.inputContainer}>
+            <FontAwesome5 name="server" size={16} color={COLORS.textGray} />
+            <TextInput style={styles.input} placeholder="http://domain.com:port" placeholderTextColor={COLORS.textGray} 
+              value={creds.host} onChangeText={t => setCreds({...creds, host:t})} />
+          </View>
+          <View style={styles.inputContainer}>
+            <FontAwesome5 name="user" size={16} color={COLORS.textGray} />
+            <TextInput style={styles.input} placeholder="Username" placeholderTextColor={COLORS.textGray} 
+              value={creds.username} onChangeText={t => setCreds({...creds, username:t})} />
+          </View>
+          <View style={styles.inputContainer}>
+            <FontAwesome5 name="lock" size={16} color={COLORS.textGray} />
+            <TextInput style={styles.input} placeholder="Password" placeholderTextColor={COLORS.textGray} secureTextEntry 
+              value={creds.password} onChangeText={t => setCreds({...creds, password:t})} />
+          </View>
+          
+          <View style={styles.inputContainer}>
+             <FontAwesome5 name="tag" size={16} color={COLORS.textGray} />
+             <TextInput style={styles.input} placeholder="Name (e.g. Home TV)" placeholderTextColor={COLORS.textGray} 
+               value={creds.name} onChangeText={t => setCreds({...creds, name:t})} />
+          </View>
+
+          <TouchableOpacity style={styles.loginBtn} onPress={() => handleLogin()}>
+            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Login</Text>}
+          </TouchableOpacity>
+
+          {accounts.length > 0 && (
+            <TouchableOpacity style={styles.manageBtn} onPress={() => setShowAccountsModal(true)}>
+              <FontAwesome5 name="users" color="#fff" size={14} />
+              <Text style={{color:'#fff', marginLeft:10}}>Manage Accounts</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+      
+      {/* Accounts Modal */}
+      <Modal visible={showAccountsModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Saved Accounts</Text>
+            <FlatList 
+              data={accounts}
+              keyExtractor={item => item.id}
+              renderItem={({item}) => (
+                <TouchableOpacity style={styles.accItem} onPress={() => loginWithStoredCreds(item)}>
+                  <View style={styles.accIcon}><Text style={{fontWeight:'bold'}}>{item.name[0]}</Text></View>
+                  <View>
+                    <Text style={{color:'#fff', fontWeight:'bold'}}>{item.name}</Text>
+                    <Text style={{color:COLORS.textGray, fontSize:10}}>{item.host}</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+            />
+            <TouchableOpacity style={styles.closeModalBtn} onPress={() => setShowAccountsModal(false)}>
+              <Text style={{color:'#fff'}}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </ImageBackground>
+  );
+
+  const renderDashboard = () => (
+    <ImageBackground source={{uri: 'https://wallpaperaccess.com/full/1567833.jpg'}} style={styles.bgImage}>
+      <SafeAreaView style={styles.container}>
+        {/* Header */}
+        <View style={styles.dashHeader}>
+           <View style={{flexDirection:'row', alignItems:'center'}}>
+             <View style={styles.userAvatar}><FontAwesome5 name="user" color={COLORS.bg} size={20}/></View>
+             <View style={{marginLeft:10}}>
+                <Text style={{color: COLORS.textGray}}>Welcome,</Text>
+                <Text style={{color:'#fff', fontWeight:'bold', fontSize:18}}>{currentUser?.username || 'User'}</Text>
+             </View>
+           </View>
+           <View style={{alignItems:'flex-end'}}>
+             <Text style={{color:'#fff', fontSize:20, fontWeight:'bold'}}>{formatTime(time)}</Text>
+             <Text style={{color: COLORS.textGray}}>{time.toDateString()}</Text>
+           </View>
+           <TouchableOpacity onPress={handleLogout} style={{marginLeft: 20}}>
+               <FontAwesome5 name="power-off" size={20} color={COLORS.red} />
+           </TouchableOpacity>
+        </View>
+
+        {/* Main Cards */}
+        <View style={styles.mainCardsRow}>
+           <TouchableOpacity style={styles.mainCard} onPress={() => navigateToCategory('live')}>
+              <LinearGradient colors={GRADIENTS.live} style={styles.cardGradient}>
+                 <Ionicons name="tv-outline" size={40} color="#fff" />
+                 <Text style={styles.mainCardTitle}>Live TV</Text>
+              </LinearGradient>
+           </TouchableOpacity>
+           
+           <TouchableOpacity style={styles.mainCard} onPress={() => navigateToCategory('movie')}>
+              <LinearGradient colors={GRADIENTS.movies} style={styles.cardGradient}>
+                 <MaterialIcons name="local-movies" size={40} color="#fff" />
+                 <Text style={styles.mainCardTitle}>Movies</Text>
+              </LinearGradient>
+           </TouchableOpacity>
+
+           <TouchableOpacity style={styles.mainCard} onPress={() => navigateToCategory('series')}>
+              <LinearGradient colors={GRADIENTS.series} style={styles.cardGradient}>
+                 <MaterialIcons name="video-library" size={40} color="#fff" />
+                 <Text style={styles.mainCardTitle}>Series</Text>
+              </LinearGradient>
+           </TouchableOpacity>
+        </View>
+
+        {/* Shortcuts */}
+        <View style={styles.shortcutsRow}>
+           <TouchableOpacity style={[styles.shortcutCard, {borderLeftColor: COLORS.red}]} onPress={() => { setGridItems(favorites); setCurrentView('grid'); }}>
+              <FontAwesome5 name="heart" size={20} color={COLORS.red} />
+              <Text style={styles.shortcutText}>Favorites</Text>
+           </TouchableOpacity>
+
+           <TouchableOpacity style={[styles.shortcutCard, {borderLeftColor: COLORS.orange}]} onPress={() => { setGridItems(history); setCurrentView('grid'); }}>
+              <FontAwesome5 name="history" size={20} color={COLORS.orange} />
+              <Text style={styles.shortcutText}>History</Text>
+           </TouchableOpacity>
+
+           <TouchableOpacity style={[styles.shortcutCard, {borderLeftColor: COLORS.purple}]} onPress={() => setShowAccountsModal(true)}>
+              <FontAwesome5 name="users-cog" size={20} color={COLORS.purple} />
+              <Text style={styles.shortcutText}>Switch Account</Text>
+           </TouchableOpacity>
+        </View>
+        
+      </SafeAreaView>
+    </ImageBackground>
+  );
+
+  const renderGrid = () => (
+    <SafeAreaView style={styles.container}>
+       {/* Header */}
+       <View style={styles.gridHeader}>
+          <TouchableOpacity onPress={() => setCurrentView('dashboard')}>
+             <Ionicons name="home" size={24} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.gridTitle}>{currentCatType.toUpperCase()}</Text>
+          <TouchableOpacity onPress={() => setShowSearch(!showSearch)}>
+             <Ionicons name="search" size={24} color="#fff" />
+          </TouchableOpacity>
+       </View>
+
+       {/* Search Bar */}
+       {showSearch && (
+         <View style={styles.searchBar}>
+            <TextInput style={styles.searchInput} placeholder="Search..." placeholderTextColor={COLORS.textGray}
+              value={searchQuery} onChangeText={t => {setSearchQuery(t); handleSearch();}} />
+            <TouchableOpacity onPress={() => {setSearchQuery(''); setSearchResults([]);}}>
+               <Ionicons name="close" size={20} color="#fff"/>
+            </TouchableOpacity>
+         </View>
+       )}
+
+       {/* Split Layout: Content (Left) | Sidebar (Right) */}
+       <View style={{flex: 1, flexDirection: 'row'}}>
+          
+          {/* Content (Left) - Flex 3 */}
+          <View style={{flex: 3, padding: 5}}>
+             {loading ? <ActivityIndicator size="large" color={COLORS.activeItem} style={{marginTop:50}} /> :
+             <FlatList 
+                data={searchQuery.length > 0 ? searchResults : gridItems}
+                keyExtractor={(item, idx) => idx.toString()}
+                numColumns={3}
+                contentContainerStyle={{paddingBottom: 20}}
+                renderItem={({item}) => {
+                   const img = item.stream_icon || item.cover;
+                   const isFav = favorites.some(f => (f.stream_id || f.series_id) === (item.stream_id || item.series_id));
+                   return (
+                     <TouchableOpacity style={styles.gridItem} onPress={() => item.series_id ? openSeriesDetails(item) : playItem(item, currentCatType === 'live' ? 'live' : 'movie')}>
+                        <ExpoImage source={{uri: img}} style={styles.poster} contentFit="cover" transition={500} />
+                        {!img && <View style={[styles.poster, {backgroundColor: '#222', justifyContent:'center', alignItems:'center'}]}><Ionicons name="image" size={30} color="#555"/></View>}
+                        
+                        <TouchableOpacity style={styles.favIcon} onPress={() => toggleFavorite(item)}>
+                           <FontAwesome5 name="heart" solid={isFav} color={isFav ? COLORS.red : '#fff'} size={12}/>
+                        </TouchableOpacity>
+                        
+                        <LinearGradient colors={['transparent', 'rgba(0,0,0,0.9)']} style={styles.posterOverlay}>
+                           <Text style={styles.posterText} numberOfLines={1}>{item.name}</Text>
+                        </LinearGradient>
+                     </TouchableOpacity>
+                   );
+                }}
+             />}
+          </View>
+
+          {/* Sidebar (Right) - Flex 1 */}
+          <View style={styles.sidebar}>
+             <View style={styles.sidebarHeader}>
+                <Text style={{color:'#fff', fontWeight:'bold'}}>Categories</Text>
+             </View>
+             <FlatList 
+                data={categories}
+                keyExtractor={item => item.category_id}
+                renderItem={({item}) => (
+                   <TouchableOpacity 
+                     style={[styles.catItem, selectedCategory?.category_id === item.category_id && styles.catItemActive]}
+                     onPress={() => handleCategorySelect(item, currentCatType)}
+                   >
+                     <Text style={[styles.catText, selectedCategory?.category_id === item.category_id && styles.catTextActive]}>
+                        {item.category_name}
+                     </Text>
+                   </TouchableOpacity>
+                )}
+             />
+          </View>
+
+       </View>
+    </SafeAreaView>
+  );
+
+  const renderDetails = () => (
+    <View style={styles.container}>
+       <ImageBackground source={{uri: seriesInfo?.cover}} style={{flex:1}} blurRadius={10}>
+         <SafeAreaView style={{flex:1, backgroundColor:'rgba(0,0,0,0.7)'}}>
+            {/* Header */}
+            <View style={{flexDirection:'row', padding:20, alignItems:'center'}}>
+               <TouchableOpacity onPress={() => setCurrentView('grid')} style={{padding:10}}>
+                  <Ionicons name="arrow-back" size={30} color="#fff"/>
+               </TouchableOpacity>
+               <Text style={{color:'#fff', fontSize:20, fontWeight:'bold', marginLeft:10}}>{seriesInfo?.name}</Text>
+            </View>
+
+            {/* Content */}
+            <View style={{flexDirection:'row', padding:20}}>
+               <Image source={{uri: seriesInfo?.cover}} style={{width:150, height:220, borderRadius:10}} />
+               <View style={{flex:1, marginLeft:20}}>
+                  <Text style={{color:'#fff', fontSize:24, fontWeight:'bold', textAlign:'left'}}>{seriesInfo?.name}</Text>
+                  <Text style={{color:COLORS.textGray, marginTop:10, textAlign:'left'}}>{seriesInfo?.plot}</Text>
+                  <Text style={{color: COLORS.activeItem, marginTop:10}}>Director: {seriesInfo?.director}</Text>
+                  <Text style={{color: COLORS.activeItem}}>Genre: {seriesInfo?.genre}</Text>
+               </View>
+            </View>
+
+            {/* Seasons */}
+            <View style={{marginTop:10}}>
+               <ScrollView horizontal contentContainerStyle={{paddingHorizontal:20}}>
+                  {seasons.map(s => (
+                     <TouchableOpacity key={s} onPress={() => setSelectedSeason(s)} 
+                        style={[styles.seasonBtn, selectedSeason === s && styles.seasonBtnActive]}>
+                        <Text style={{color: selectedSeason === s ? '#fff' : COLORS.textGray}}>Season {s}</Text>
+                     </TouchableOpacity>
+                  ))}
+               </ScrollView>
+            </View>
+
+            {/* Episodes */}
+            <FlatList 
+               data={episodes[selectedSeason]}
+               keyExtractor={item => item.id.toString()}
+               contentContainerStyle={{padding:20}}
+               renderItem={({item, index}) => (
+                  <TouchableOpacity style={styles.epItem} onPress={() => { setCurrentEpisodeList(episodes[selectedSeason]); playEpisode(index); }}>
+                     <View style={styles.playIcon}><Ionicons name="play" color="#fff" size={14}/></View>
+                     <View>
+                        <Text style={{color:'#fff', fontWeight:'bold'}}>{item.title}</Text>
+                        <Text style={{color: COLORS.textGray, fontSize:10}}>Episode {item.episode_num}</Text>
+                     </View>
+                  </TouchableOpacity>
+               )}
+            />
+         </SafeAreaView>
+       </ImageBackground>
+    </View>
+  );
+
+  const renderPlayer = () => (
+    <View style={{flex:1, backgroundColor:'#000'}}>
+       <StatusBar hidden />
+       <VLCPlayer
+         style={{width:'100%', height:'100%'}}
+         source={{uri: playerUrl}}
+         autoplay={true}
+         resizeMode="contain"
+         paused={isPaused}
+         onProgress={({currentTime, duration}: any) => {
+            setCurrentTime(currentTime);
+            setTotalDuration(duration);
+         }}
+       />
+       
+       {/* Custom Controls Overlay */}
+       <TouchableOpacity activeOpacity={1} style={styles.controlsLayer} onPress={toggleControls}>
+          {showControls && (
+             <View style={styles.overlayUI}>
+                {/* Top */}
+                <View style={styles.playerTop}>
+                   <TouchableOpacity onPress={() => setCurrentView(currentCatType === 'series' ? 'details' : 'grid')}>
+                      <Ionicons name="arrow-back" size={28} color="#fff" />
+                   </TouchableOpacity>
+                   <Text style={{color:'#fff', fontSize:16, marginLeft:15}}>{playerTitle}</Text>
+                   <TouchableOpacity style={styles.extPlayerBtn} onPress={() => Linking.openURL(playerUrl)}>
+                      <MaterialCommunityIcons name="vlc" size={24} color={COLORS.orange} />
+                      <Text style={{color:'#fff', fontSize:10, marginLeft:5}}>External VLC</Text>
+                   </TouchableOpacity>
+                </View>
+
+                {/* Center */}
+                <View style={styles.playerCenter}>
+                   {currentCatType === 'series' && (
+                      <TouchableOpacity onPress={() => playEpisode(currentEpisodeIndex - 1)}>
+                         <Ionicons name="play-skip-back" size={40} color={currentEpisodeIndex > 0 ? '#fff' : '#555'} />
+                      </TouchableOpacity>
+                   )}
+
+                   <TouchableOpacity onPress={() => setIsPaused(!isPaused)} style={{marginHorizontal:40}}>
+                      <Ionicons name={isPaused ? "play-circle" : "pause-circle"} size={70} color={COLORS.activeItem} />
+                   </TouchableOpacity>
+
+                   {currentCatType === 'series' && (
+                      <TouchableOpacity onPress={() => playEpisode(currentEpisodeIndex + 1)}>
+                         <Ionicons name="play-skip-forward" size={40} color={currentEpisodeIndex < currentEpisodeList.length - 1 ? '#fff' : '#555'} />
+                      </TouchableOpacity>
+                   )}
+                </View>
+
+                {/* Bottom */}
+                <View style={styles.playerBottom}>
+                   <View style={{flexDirection:'row', justifyContent:'space-between', marginBottom:5}}>
+                      <Text style={{color:'#fff'}}>{formatDuration(currentTime)}</Text>
+                      <Text style={{color:'#fff'}}>{formatDuration(totalDuration)}</Text>
+                   </View>
+                   <View style={styles.progressBarBg}>
+                      <View style={[styles.progressBarFill, {width: `${(currentTime/totalDuration)*100}%`}]} />
+                   </View>
+                </View>
+             </View>
+          )}
+       </TouchableOpacity>
+    </View>
+  );
+
+  return (
+    <View style={{flex:1, backgroundColor: COLORS.bg}}>
+       <StatusBar style="light" />
+       {currentView === 'login' && renderLogin()}
+       {currentView === 'dashboard' && renderDashboard()}
+       {currentView === 'grid' && renderGrid()}
+       {currentView === 'details' && renderDetails()}
+       {currentView === 'player' && renderPlayer()}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  bgImage: { flex: 1, justifyContent: 'center' },
+  
+  // Login
+  loginOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
+  loginCard: { width: 400, padding: 30, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  logo: { width: 100, height: 100, alignSelf: 'center', marginBottom: 20 },
+  appTitle: { color: '#fff', fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 30 },
+  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.inputBg, marginBottom: 15, borderRadius: 10, paddingHorizontal: 15, height: 50 },
+  input: { flex: 1, color: '#fff', marginLeft: 10 },
+  loginBtn: { backgroundColor: 'transparent', borderWidth:1, borderColor: COLORS.purple, height: 50, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
+  btnText: { color: '#fff', fontWeight: 'bold' },
+  manageBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 20 },
+  
+  // Modal
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
+  modalContent: { width: 350, backgroundColor: '#222', borderRadius: 15, padding: 20 },
+  modalTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
+  accItem: { flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 10, marginBottom: 10 },
+  accIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: COLORS.purple, justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  closeModalBtn: { marginTop: 10, padding: 10, alignItems: 'center' },
+
+  // Dashboard
+  dashHeader: { flexDirection: 'row', justifyContent: 'space-between', padding: 20 },
+  userAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center' },
+  mainCardsRow: { flexDirection: 'row', justifyContent: 'center', gap: 20, marginTop: 40 },
+  mainCard: { width: 160, height: 140, borderRadius: 20, overflow: 'hidden' },
+  cardGradient: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 15 },
+  mainCardTitle: { color: '#fff', fontWeight: 'bold', marginTop: 10, fontSize: 16 },
+  shortcutsRow: { flexDirection: 'row', justifyContent: 'center', gap: 15, marginTop: 30 },
+  shortcutCard: { width: 140, height: 80, backgroundColor: COLORS.card, borderRadius: 15, justifyContent: 'center', alignItems: 'center', borderLeftWidth: 4 },
+  shortcutText: { color: '#fff', marginTop: 5, fontSize: 12 },
+
+  // Grid / Sidebar
+  gridHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 15, backgroundColor: COLORS.sidebarBg },
+  gridTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  searchBar: { flexDirection: 'row', backgroundColor: COLORS.card, margin: 10, borderRadius: 10, paddingHorizontal: 10, alignItems: 'center' },
+  searchInput: { flex: 1, color: '#fff', height: 40 },
+  
+  sidebar: { flex: 1, backgroundColor: COLORS.sidebarBg, borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.1)' },
+  sidebarHeader: { padding: 15, backgroundColor: COLORS.activeItem },
+  catItem: { padding: 15, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+  catItemActive: { backgroundColor: 'rgba(0,0,0,0.3)', borderRightWidth: 3, borderRightColor: COLORS.activeItem },
+  catText: { color: COLORS.textGray, textAlign: 'right', fontSize: 12 },
+  catTextActive: { color: '#fff', fontWeight: 'bold' },
+
+  gridItem: { flex: 1/3, margin: 5, aspectRatio: 0.65, backgroundColor: '#222', borderRadius: 8, overflow: 'hidden' },
+  poster: { width: '100%', height: '100%' },
+  posterOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 5 },
+  posterText: { color: '#fff', fontSize: 10, textAlign: 'center' },
+  favIcon: { position: 'absolute', top: 5, left: 5, backgroundColor: 'rgba(0,0,0,0.6)', padding: 5, borderRadius: 15 },
+
+  // Details
+  seasonBtn: { paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 20, marginRight: 10 },
+  seasonBtnActive: { backgroundColor: COLORS.activeItem },
+  epItem: { flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: 'rgba(255,255,255,0.05)', marginBottom: 5, borderRadius: 10 },
+  playIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+
+  // Player
+  controlsLayer: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0)', zIndex: 10 },
+  overlayUI: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'space-between', padding: 20 },
+  playerTop: { flexDirection: 'row', alignItems: 'center' },
+  extPlayerBtn: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.1)', padding: 8, borderRadius: 5 },
+  playerCenter: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
+  playerBottom: { paddingBottom: 20 },
+  progressBarBg: { height: 4, backgroundColor: '#555', borderRadius: 2 },
+  progressBarFill: { height: '100%', backgroundColor: COLORS.activeItem, borderRadius: 2 },
+});
+
+
