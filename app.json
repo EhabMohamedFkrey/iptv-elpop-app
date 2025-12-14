@@ -4,29 +4,18 @@
     "slug": "iptv-smarters-pro",
     "version": "1.0.0",
     "orientation": "landscape",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0f0518"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.iptv.smarters.pro"
     },
     "android": {
       "package": "com.iptv.smarters.pro",
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0f0518"
-      },
       "permissions": [
         "INTERNET",
         "ACCESS_NETWORK_STATE",
         "WAKE_LOCK"
-      ],
-      "usesCleartextTraffic": true
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -35,15 +24,6 @@
       "expo-router",
       "expo-screen-orientation"
     ],
-    "scheme": "iptvsmarters",
-    "extra": {
-      "router": {
-        "origin": false
-      },
-      "eas": {
-        "projectId": "ff58dd62-8ead-4a6b-8d08-cc332d0eda1e"
-      }
-    },
-    "owner": "elpop"
+    "scheme": "iptvsmarters"
   }
 }
