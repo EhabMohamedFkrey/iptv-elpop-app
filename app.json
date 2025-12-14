@@ -24,6 +24,11 @@
       "expo-router",
       "expo-screen-orientation"
     ],
-    "scheme": "iptvsmarters"
+    "scheme": "iptvsmarters",
+    "extra": {
+      "eas": {
+        "projectId": "1c7d23f3-2c1b-4b9a-8a5c-5e4f9b8c3d2a"
+      }
+    }
   }
 }
