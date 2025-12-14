@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "IPTV Smarters Pro",
+    "slug": "iptv-smarters-pro",
+    "version": "1.0.0",
+    "orientation": "landscape",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f0518"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.iptv.smarters.pro"
+    },
+    "android": {
+      "package": "com.iptv.smarters.pro",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0f0518"
+      },
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "WAKE_LOCK"
+      ],
+      "usesCleartextTraffic": true
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-screen-orientation"
+    ],
+    "scheme": "iptvsmarters"
+  }
+}
