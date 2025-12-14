@@ -1,7 +1,7 @@
 name: Build Android APK
 
 on:
-  workflow_dispatch: # يسمح لك بتشغيل البناء بزر يدوي
+  workflow_dispatch:
 
 jobs:
   build:
@@ -25,6 +25,8 @@ jobs:
       - name: 📦 Install dependencies
         run: npm install
 
+      - name: ➕ Install missing peer dependencies
+        run: npx expo install expo-font
+
       - name: 🚀 Build APK
         run: eas build -p android --profile preview --non-interactive
-
